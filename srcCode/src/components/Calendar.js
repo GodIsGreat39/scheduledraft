@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import Sortable from 'react-sortablejs';
+import { Sortable } from 'react-sortablejs';
 import { timeslots } from '../timeslots';
 
 // A weekly calendar showing dynamic time slots grouped by weekday/weekend.
@@ -180,6 +180,7 @@ const Calendar = () => {
   };
 
   const handleFocusWeekday = (slotOrder) => {
+    console.log('focus weekday slot', slotOrder, preferencesWeekday);
     setPreferencesWeekday((prev) => {
       if (!prev[slotOrder].priority) {
         const nextPri = getNextPriority(prev);
@@ -203,6 +204,7 @@ const Calendar = () => {
   };
 
   const handleLocalInputChange = (slotOrder, value) => {
+    console.log('local change', slotOrder, value);
     setEditingInputs((prev) => ({ ...prev, [slotOrder]: value }));
   };
 
@@ -301,6 +303,7 @@ const Calendar = () => {
     groupKey,
   }) => {
     const orderedList = getOrderedList(preferences, []);
+    // (no controlled list state; using Sortable with onEnd handler)
 
     // Keyboard move helper: move an item up/down by delta (±1)
     const moveItemKeyboard = (slotOrder, delta) => {
@@ -536,9 +539,10 @@ const Calendar = () => {
                   tag="ol"
                   style={{ margin: 0, paddingLeft: 12, listStyle: 'none' }}
                   onEnd={(evt) => {
+                    // Use existing handler to update prefs.
                     handleOrderChange(preferences, setPrefs, evt.oldIndex, evt.newIndex);
                   }}
-                  options={{ animation: 150 }}
+                  animation={150}
                 >
                   {orderedList.map((item, idx) => (
                     <li
