@@ -80,8 +80,11 @@ const Calendar = () => {
     return acc;
   }, {});
 
-  const [preferencesWeekday, setPreferencesWeekday] = useState(initialWeekday);
-  const [preferencesWeekend, setPreferencesWeekend] = useState(initialWeekend);
+  // authoritative datastore for both groups
+  const [slotPreferences, setSlotPreferences] = useState({
+    weekday: initialWeekday,
+    weekend: initialWeekend,
+  });
   const [editingInputs, setEditingInputs] = useState({});
   // dropTarget no longer needed; SortableJS will handle drag-drop
   // const [dropTarget, setDropTarget] = useState({ group: null, index: null });
@@ -179,28 +182,21 @@ const Calendar = () => {
     setPrefs(newPrefs);
   };
 
-  const handleFocusWeekday = (slotOrder) => {
-    console.log('focus weekday slot', slotOrder, preferencesWeekday);
-    setPreferencesWeekday((prev) => {
-      if (!prev[slotOrder].priority) {
-        const nextPri = getNextPriority(prev);
-        return reorderGroupOnSet(prev, slotOrder, nextPri);
+  // generic focus handler taking group string
+  const handleFocus = (group, slotOrder) => {
+    // fill priority if blank
+    setSlotPreferences((prev) => {
+      const prefs = prev[group];
+      if (!prefs[slotOrder].priority) {
+        const nextPri = getNextPriority(prefs);
+        return { ...prev, [group]: reorderGroupOnSet(prefs, slotOrder, nextPri) };
       }
       return prev;
     });
-    // prepare local edit buffer so user can type without immediate effect
-    setEditingInputs((prev) => ({ ...prev, [slotOrder]: preferencesWeekday[slotOrder]?.priority || '' }));
-  };
-
-  const handleFocusWeekend = (slotOrder) => {
-    setPreferencesWeekend((prev) => {
-      if (!prev[slotOrder].priority) {
-        const nextPri = getNextPriority(prev);
-        return reorderGroupOnSet(prev, slotOrder, nextPri);
-      }
-      return prev;
-    });
-    setEditingInputs((prev) => ({ ...prev, [slotOrder]: preferencesWeekend[slotOrder]?.priority || '' }));
+    setEditingInputs((prev) => ({
+      ...prev,
+      [slotOrder]: slotPreferences[group][slotOrder]?.priority || '',
+    }));
   };
 
   const handleLocalInputChange = (slotOrder, value) => {
@@ -208,10 +204,10 @@ const Calendar = () => {
     setEditingInputs((prev) => ({ ...prev, [slotOrder]: value }));
   };
 
-  const commitLocalInput = (slotOrder, handleChange) => {
+  const commitLocalInput = (slotOrder, group, handleChange) => {
     const val = editingInputs[slotOrder];
     if (val === undefined) return;
-    handleChange(slotOrder, val === '' ? '' : val);
+    handleChange(group, slotOrder, val === '' ? '' : val);
     setEditingInputs((prev) => {
       const copy = { ...prev };
       delete copy[slotOrder];
@@ -219,34 +215,18 @@ const Calendar = () => {
     });
   };
 
-  const handleChangeWeekday = (slotOrder, newValue) => {
-    setPreferencesWeekday((prev) => {
+  const handleChange = (group, slotOrder, newValue) => {
+    setSlotPreferences((prev) => {
+      const prefs = prev[group];
       const num = parseInt(newValue);
       if (!isNaN(num) && newValue !== '') {
-        return reorderGroupOnSet(prev, slotOrder, num);
+        return { ...prev, [group]: reorderGroupOnSet(prefs, slotOrder, num) };
       } else if (newValue === '') {
-        const oldPri = prev[slotOrder].priority
-          ? parseInt(prev[slotOrder].priority)
+        const oldPri = prefs[slotOrder].priority
+          ? parseInt(prefs[slotOrder].priority)
           : null;
         if (oldPri) {
-          return reorderGroupOnClear(prev, slotOrder, oldPri);
-        }
-      }
-      return prev;
-    });
-  };
-
-  const handleChangeWeekend = (slotOrder, newValue) => {
-    setPreferencesWeekend((prev) => {
-      const num = parseInt(newValue);
-      if (!isNaN(num) && newValue !== '') {
-        return reorderGroupOnSet(prev, slotOrder, num);
-      } else if (newValue === '') {
-        const oldPri = prev[slotOrder].priority
-          ? parseInt(prev[slotOrder].priority)
-          : null;
-        if (oldPri) {
-          return reorderGroupOnClear(prev, slotOrder, oldPri);
+          return { ...prev, [group]: reorderGroupOnClear(prefs, slotOrder, oldPri) };
         }
       }
       return prev;
@@ -254,11 +234,7 @@ const Calendar = () => {
   };
 
   const handleSubmit = () => {
-    const combined = {
-      weekday: preferencesWeekday,
-      weekend: preferencesWeekend,
-    };
-    console.log('submitted', combined);
+    console.log('submitted', slotPreferences);
     alert('Preferences saved (console output)');
   };
 
@@ -622,11 +598,11 @@ const Calendar = () => {
           slotsByDay={slotsByDayWeekday}
           days={weekdayDays}
           uniqueTimes={uniqueTimesWeekday}
-          preferences={preferencesWeekday}
-          handleChange={handleChangeWeekday}
-          handleFocus={handleFocusWeekday}
+          preferences={slotPreferences.weekday}
+          handleChange={handleChange}
+          handleFocus={handleFocus}
           totalSlots={totalWeekdaySlots}
-          setPrefs={setPreferencesWeekday}
+          setPrefs={(newPrefs) => setSlotPreferences((prev) => ({ ...prev, weekday: newPrefs }))}
           groupKey="weekday"
         />
 
@@ -635,11 +611,11 @@ const Calendar = () => {
           slotsByDay={slotsByDayWeekend}
           days={weekendDays}
           uniqueTimes={uniqueTimesWeekend}
-          preferences={preferencesWeekend}
-          handleChange={handleChangeWeekend}
-          handleFocus={handleFocusWeekend}
+          preferences={slotPreferences.weekend}
+          handleChange={handleChange}
+          handleFocus={handleFocus}
           totalSlots={totalWeekendSlots}
-          setPrefs={setPreferencesWeekend}
+          setPrefs={(newPrefs) => setSlotPreferences((prev) => ({ ...prev, weekend: newPrefs }))}
           groupKey="weekend"
         />
 
