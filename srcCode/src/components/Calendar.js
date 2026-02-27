@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import Sortable from 'react-sortablejs';
+import { ReactSortable } from 'react-sortablejs';
 import { timeslots } from '../timeslots';
 
 // A weekly calendar showing dynamic time slots grouped by weekday/weekend.
@@ -535,11 +535,11 @@ const Calendar = () => {
                   Click a slot to add it to your list
                 </p>
               ) : (
-                <Sortable
+                <ReactSortable
                   tag="ol"
                   style={{ margin: 0, paddingLeft: 12, listStyle: 'none' }}
                   onEnd={(evt) => {
-                    // Use existing handler to update prefs.
+                    // update prefs when drag finishes
                     handleOrderChange(preferences, setPrefs, evt.oldIndex, evt.newIndex);
                   }}
                   animation={150}
@@ -572,7 +572,7 @@ const Calendar = () => {
                       <span style={{ fontWeight: 600 }}>{item.pri}.</span> {item.label}
                     </li>
                   ))}
-                </Sortable>
+                </ReactSortable>
               )}
             </div>
           </div>
