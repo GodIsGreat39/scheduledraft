@@ -538,6 +538,8 @@ const Calendar = () => {
                 <ReactSortable
                   tag="ol"
                   style={{ margin: 0, paddingLeft: 12, listStyle: 'none' }}
+                  list={orderedList}
+                  setList={() => { /* noop, we handle ordering in onEnd */ }}
                   onEnd={(evt) => {
                     // update prefs when drag finishes
                     handleOrderChange(preferences, setPrefs, evt.oldIndex, evt.newIndex);
