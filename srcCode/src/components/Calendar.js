@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Sortable } from 'react-sortablejs';
+import Sortable from 'react-sortablejs';
 import { timeslots } from '../timeslots';
 
 // A weekly calendar showing dynamic time slots grouped by weekday/weekend.
