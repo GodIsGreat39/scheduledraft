@@ -302,7 +302,7 @@ const Calendar = () => {
     setPrefs,
     groupKey,
   }) => {
-    const orderedList = getOrderedList(preferences, []);
+    const orderedList = useMemo(() => getOrderedList(preferences, []), [preferences]);
     // controlled list mode: ReactSortable will call setList when drag order changes
     const reorderFromSortable = (newList) => {
       // newList is array of {order, pri, label}
