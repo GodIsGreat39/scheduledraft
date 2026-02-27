@@ -303,7 +303,15 @@ const Calendar = () => {
     groupKey,
   }) => {
     const orderedList = getOrderedList(preferences, []);
-    // (no controlled list state; using Sortable with onEnd handler)
+    // controlled list mode: ReactSortable will call setList when drag order changes
+    const reorderFromSortable = (newList) => {
+      // newList is array of {order, pri, label}
+      const newPrefs = { ...preferences };
+      newList.forEach((item, i) => {
+        newPrefs[item.order].priority = (i + 1).toString();
+      });
+      setPrefs(newPrefs);
+    };
 
     // Keyboard move helper: move an item up/down by delta (±1)
     const moveItemKeyboard = (slotOrder, delta) => {
@@ -539,9 +547,9 @@ const Calendar = () => {
                   tag="ol"
                   style={{ margin: 0, paddingLeft: 12, listStyle: 'none' }}
                   list={orderedList}
-                  setList={() => { /* noop, we handle ordering in onEnd */ }}
+                  setList={reorderFromSortable}
                   onEnd={(evt) => {
-                    // update prefs when drag finishes
+                    // update prefs when drag finishes (redundant with setList but safe)
                     handleOrderChange(preferences, setPrefs, evt.oldIndex, evt.newIndex);
                   }}
                   animation={150}
