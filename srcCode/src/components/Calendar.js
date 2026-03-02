@@ -1,571 +1,377 @@
-import React, { useState, useMemo } from 'react';
-import { ReactSortable } from 'react-sortablejs';
-import { timeslots } from '../timeslots';
+import React, { useState, useEffect, useContext } from 'react';
+import { AuthContext } from '../context/AuthContext';
+import { supabase } from '../supabaseClient';
+import ScheduleGrid from './ScheduleGrid';
+import {
+  theme,
+} from './calendarUtils';
 
 // A weekly calendar showing dynamic time slots grouped by weekday/weekend.
 // Coaches assign a priority number (1 = most preferred, max = unavailable).
 // Each group (weekday/weekend) is independent.
-// Grid + ordered list on the right provide dual interaction methods.
 
-// Theme colors
-const theme = {
-  primary: '#0066cc',
-  primaryHover: '#0052a3',
-  secondary: '#6c757d',
-  success: '#28a745',
-  danger: '#dc3545',
-  light: '#f8f9fa',
-  border: '#dee2e6',
-  text: '#212529',
-  textLight: '#6c757d',
-  background: '#ffffff',
+const GridWithOrderList = ({
+  title,
+  slotsByDay,
+  days,
+  uniqueTimes,
+  preferences,
+  totalSlots,
+  groupKey,
+  onMove,
+  onAutoComplete,
+  headerColor,
+}) => {
+  return (
+    <div
+      style={{
+        marginBottom: 40,
+        padding: 20,
+        backgroundColor: theme.light,
+        borderRadius: 8,
+        border: `1px solid ${theme.border}`,
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <h3 style={{ color: theme.text, margin: 0 }}>{title}</h3>
+      </div>
+      <div style={{ display: 'flex', gap: 30 }}>
+        <ScheduleGrid
+          slotsByDay={slotsByDay}
+          days={days}
+          uniqueTimes={uniqueTimes}
+          preferences={preferences}
+          totalSlots={totalSlots}
+          groupKey={groupKey}
+          onDrop={onMove}
+          onAutoComplete={onAutoComplete}
+          headerColor={headerColor}
+        />
+      </div>
+    </div>
+  );
 };
 
 const Calendar = () => {
-  const weekdaySlots = timeslots.filter((s) => s.slotGroup === 'weekday');
-  const weekendSlots = timeslots.filter((s) => s.slotGroup === 'weekend');
-
-  const totalWeekdaySlots = weekdaySlots.length;
-  const totalWeekendSlots = weekendSlots.length;
-
-  // Group slots by day for each group
-  const slotsByDayWeekday = useMemo(() => {
-    const map = {
-      Mon: [],
-      Tue: [],
-      Wed: [],
-      Thu: [],
-      Fri: [],
-    };
-    weekdaySlots.forEach((slot) => {
-      map[slot.slotDay].push(slot);
-    });
-    return map;
-  }, []);
-
-  const slotsByDayWeekend = useMemo(() => {
-    const map = {
-      Sat: [],
-      Sun: [],
-    };
-    weekendSlots.forEach((slot) => {
-      map[slot.slotDay].push(slot);
-    });
-    return map;
-  }, []);
-
-  const weekdayDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
-  const weekendDays = ['Sat', 'Sun'];
-
-  const uniqueTimesWeekday = useMemo(() => {
-    const times = new Set();
-    weekdaySlots.forEach((slot) => times.add(slot.slotTime));
-    return Array.from(times).sort();
-  }, []);
-
-  const uniqueTimesWeekend = useMemo(() => {
-    const times = new Set();
-    weekendSlots.forEach((slot) => times.add(slot.slotTime));
-    return Array.from(times).sort();
-  }, []);
-
-  // Initialize preferences for each group
-  const initialWeekday = weekdaySlots.reduce((acc, slot) => {
-    acc[slot.slotOrder] = { priority: '', slotLabel: slot.slotLabel };
-    return acc;
-  }, {});
-
-  const initialWeekend = weekendSlots.reduce((acc, slot) => {
-    acc[slot.slotOrder] = { priority: '', slotLabel: slot.slotLabel };
-    return acc;
-  }, {});
+  const { user } = useContext(AuthContext);
+  const [loading, setLoading] = useState(true);
+  const [isSlotsLocked, setIsSlotsLocked] = useState(false);
+  const [coachesList, setCoachesList] = useState([]);
+  const [selectedCoachId, setSelectedCoachId] = useState(user ? user.id : null);
+  const [saving, setSaving] = useState(false);
+  const [calendarData, setCalendarData] = useState({
+    weekdaySlots: [],
+    weekendSlots: [],
+    totalWeekdaySlots: 0,
+    totalWeekendSlots: 0,
+    slotsByDayWeekday: { Mon: [], Tue: [], Wed: [], Thu: [], Fri: [] },
+    slotsByDayWeekend: { Sat: [], Sun: [] },
+    uniqueTimesWeekday: [],
+    uniqueTimesWeekend: [],
+    weekdayDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
+    weekendDays: ['Sat', 'Sun']
+  });
+  const [initialState, setInitialState] = useState({
+    weekday: {},
+    weekend: {}
+  });
 
   // authoritative datastore for both groups
   const [slotPreferences, setSlotPreferences] = useState({
-    weekday: initialWeekday,
-    weekend: initialWeekend,
+    weekday: {},
+    weekend: {},
   });
-  const [editingInputs, setEditingInputs] = useState({});
-  // dropTarget no longer needed; SortableJS will handle drag-drop
-  // const [dropTarget, setDropTarget] = useState({ group: null, index: null });
   const [toast, setToast] = useState(null);
-  // removed global ref; we will create per-grid refs inside helper
 
-  // Consolidate preferences within a group
-  const compactPrefsForGroup = (prefs) => {
-    const list = [];
-    Object.entries(prefs).forEach(([order, data]) => {
-      const pri = data.priority ? parseInt(data.priority) : null;
-      if (pri) {
-        list.push({ order: parseInt(order), pri });
-      }
-    });
-    list.sort((a, b) => a.pri - b.pri);
-    const newPrefs = { ...prefs };
-    list.forEach(({ order }, i) => {
-      newPrefs[order].priority = (i + 1).toString();
-    });
-    return newPrefs;
-  };
+  useEffect(() => {
+    const fetchSlots = async () => {
+      const { data: dbSlots, error } = await supabase
+        .from('slots')
+        .select('*');
 
-  // Get next available priority
-  const getNextPriority = (prefs) => {
-    const list = [];
-    Object.entries(prefs).forEach(([order, data]) => {
-      const pri = data.priority ? parseInt(data.priority) : null;
-      if (pri) {
-        list.push(pri);
+      if (error) {
+        console.error('Error fetching slots:', error);
+        setLoading(false);
+        return;
       }
-    });
-    if (list.length === 0) return 1;
-    return Math.max(...list) + 1;
-  };
 
-  // Reorder when a new priority is set (per group)
-  const reorderGroupOnSet = (prefs, changedOrder, newPriority) => {
-    let flat = [];
-    Object.entries(prefs).forEach(([order, data]) => {
-      const pri = data.priority ? parseInt(data.priority) : null;
-      if (pri) {
-        flat.push({ order: parseInt(order), pri });
-      }
-    });
-    flat = flat.filter((e) => e.order !== changedOrder);
-    const hasConflict = flat.some((e) => e.pri === newPriority);
-    if (hasConflict) {
-      flat.forEach((e) => {
-        if (e.pri >= newPriority) {
-          e.pri += 1;
-        }
+      const dayOrder = { 'Mon': 1, 'Tue': 2, 'Wed': 3, 'Thu': 4, 'Fri': 5, 'Sat': 6, 'Sun': 7 };
+      
+      // Sort slots by day then time
+      const sortedSlots = dbSlots.sort((a, b) => {
+        const dA = dayOrder[a.slotDay] || 99;
+        const dB = dayOrder[b.slotDay] || 99;
+        if (dA !== dB) return dA - dB;
+        return a.slotStartTime.localeCompare(b.slotStartTime);
       });
-    }
-    flat.push({ order: changedOrder, pri: newPriority });
-    flat.sort((a, b) => a.pri - b.pri);
-    const newPrefs = { ...prefs };
-    flat.forEach(({ order, pri }) => {
-      newPrefs[order].priority = pri.toString();
-    });
-    return newPrefs;
-  };
 
-  // Clear priority and collapse gaps (per group)
-  const reorderGroupOnClear = (prefs, changedOrder, oldPriority) => {
-    const newPrefs = { ...prefs };
-    Object.entries(newPrefs).forEach(([order, data]) => {
-      const pri = data.priority ? parseInt(data.priority) : null;
-      if (pri && pri > oldPriority) {
-        newPrefs[order].priority = (pri - 1).toString();
-      }
-    });
-    newPrefs[changedOrder].priority = '';
-    return compactPrefsForGroup(newPrefs);
-  };
+      let weekdayOrder = 1;
+      let weekendOrder = 1;
 
-  // legacy drag handlers removed; SortableJS will drive ordering now
-
-  // Drop handler based on mouse event position relative to list container
-  // when Sortable informs us of order change, update preferences
-  const handleOrderChange = (prefs, setPrefs, oldIndex, newIndex) => {
-    if (oldIndex === newIndex) return;
-    const list = [];
-    Object.entries(prefs).forEach(([order, data]) => {
-      const pri = data.priority ? parseInt(data.priority) : null;
-      if (pri) list.push({ order: parseInt(order), pri });
-    });
-    list.sort((a, b) => a.pri - b.pri);
-    const moved = list.splice(oldIndex, 1)[0];
-    list.splice(newIndex, 0, moved);
-    const newPrefs = { ...prefs };
-    list.forEach((item, i) => {
-      newPrefs[item.order].priority = (i + 1).toString();
-    });
-    setPrefs(newPrefs);
-  };
-
-  // generic focus handler taking group string
-  const handleFocus = (group, slotOrder) => {
-    // fill priority if blank
-    setSlotPreferences((prev) => {
-      const prefs = prev[group];
-      if (!prefs[slotOrder].priority) {
-        const nextPri = getNextPriority(prefs);
-        return { ...prev, [group]: reorderGroupOnSet(prefs, slotOrder, nextPri) };
-      }
-      return prev;
-    });
-    setEditingInputs((prev) => ({
-      ...prev,
-      [slotOrder]: slotPreferences[group][slotOrder]?.priority || '',
-    }));
-  };
-
-  const handleLocalInputChange = (slotOrder, value) => {
-    console.log('local change', slotOrder, value);
-    setEditingInputs((prev) => ({ ...prev, [slotOrder]: value }));
-  };
-
-  const commitLocalInput = (slotOrder, group, handleChange) => {
-    const val = editingInputs[slotOrder];
-    if (val === undefined) return;
-    handleChange(group, slotOrder, val === '' ? '' : val);
-    setEditingInputs((prev) => {
-      const copy = { ...prev };
-      delete copy[slotOrder];
-      return copy;
-    });
-  };
-
-  const handleChange = (group, slotOrder, newValue) => {
-    setSlotPreferences((prev) => {
-      const prefs = prev[group];
-      const num = parseInt(newValue);
-      if (!isNaN(num) && newValue !== '') {
-        return { ...prev, [group]: reorderGroupOnSet(prefs, slotOrder, num) };
-      } else if (newValue === '') {
-        const oldPri = prefs[slotOrder].priority
-          ? parseInt(prefs[slotOrder].priority)
-          : null;
-        if (oldPri) {
-          return { ...prev, [group]: reorderGroupOnClear(prefs, slotOrder, oldPri) };
-        }
-      }
-      return prev;
-    });
-  };
-
-  const handleSubmit = () => {
-    console.log('submitted', slotPreferences);
-    alert('Preferences saved (console output)');
-  };
-
-  // Get ordered list for a group
-  const getOrderedList = (prefs, slots) => {
-    const list = [];
-    Object.entries(prefs).forEach(([order, data]) => {
-      const pri = data.priority ? parseInt(data.priority) : null;
-      if (pri) {
-        list.push({ order: parseInt(order), pri, label: data.slotLabel });
-      }
-    });
-    list.sort((a, b) => a.pri - b.pri);
-    return list;
-  };
-
-  // Detect whether a group's priorities contain gaps (non-consecutive starting at 1)
-  const hasGaps = (prefs) => {
-    const pris = Object.values(prefs)
-      .map((d) => (d.priority ? parseInt(d.priority) : null))
-      .filter(Boolean)
-      .sort((a, b) => a - b);
-    if (pris.length === 0) return false;
-    for (let i = 0; i < pris.length; i++) {
-      if (pris[i] !== i + 1) return true;
-    }
-    return false;
-  };
-
-  // Grid rendering helper
-  // Component used to render a grid and its ordered list; separated to obey hooks rules
-  const GridWithOrderList = ({
-    title,
-    slotsByDay,
-    days,
-    uniqueTimes,
-    preferences,
-    handleChange,
-    handleFocus,
-    totalSlots,
-    setPrefs,
-    groupKey,
-  }) => {
-    const orderedList = useMemo(() => getOrderedList(preferences, []), [preferences]);
-    // controlled list mode: ReactSortable will call setList when drag order changes
-    const reorderFromSortable = (newList) => {
-      // newList is array of {order, pri, label}
-      const newPrefs = { ...preferences };
-      newList.forEach((item, i) => {
-        newPrefs[item.order].priority = (i + 1).toString();
+      const processedSlots = sortedSlots.map(slot => {
+        const isWeekend = ['Sat', 'Sun'].includes(slot.slotDay);
+        const group = isWeekend ? 'weekend' : 'weekday';
+        const order = isWeekend ? weekendOrder++ : weekdayOrder++;
+        const timeStr = `${slot.slotStartTime.slice(0, 5)} - ${slot.slotEndTime.slice(0, 5)}`;
+        
+        return {
+          ...slot,
+          slotGroup: group,
+          slotOrder: order,
+          slotTime: timeStr,
+          slotLabel: `${slot.slotDay} ${timeStr}`
+        };
       });
-      setPrefs(newPrefs);
+
+      const weekdaySlots = processedSlots.filter(s => s.slotGroup === 'weekday');
+      const weekendSlots = processedSlots.filter(s => s.slotGroup === 'weekend');
+
+      const slotsByDayWeekday = { Mon: [], Tue: [], Wed: [], Thu: [], Fri: [] };
+      weekdaySlots.forEach(slot => slotsByDayWeekday[slot.slotDay].push(slot));
+
+      const slotsByDayWeekend = { Sat: [], Sun: [] };
+      weekendSlots.forEach(slot => slotsByDayWeekend[slot.slotDay].push(slot));
+
+      const uniqueTimesWeekday = Array.from(new Set(weekdaySlots.map(s => s.slotTime))).sort();
+      const uniqueTimesWeekend = Array.from(new Set(weekendSlots.map(s => s.slotTime))).sort();
+
+      const initialWeekday = weekdaySlots.reduce((acc, slot) => {
+        acc[slot.slotOrder] = { priority: '', slotLabel: slot.slotLabel };
+        return acc;
+      }, {});
+
+      const initialWeekend = weekendSlots.reduce((acc, slot) => {
+        acc[slot.slotOrder] = { priority: '', slotLabel: slot.slotLabel };
+        return acc;
+      }, {});
+
+      const { data: lockData } = await supabase
+        .from('app_settings')
+        .select('value')
+        .eq('key', 'slots_locked')
+        .maybeSingle();
+      setIsSlotsLocked(lockData?.value === 'true');
+
+      setCalendarData({
+        weekdaySlots,
+        weekendSlots,
+        totalWeekdaySlots: weekdaySlots.length,
+        totalWeekendSlots: weekendSlots.length,
+        slotsByDayWeekday,
+        slotsByDayWeekend,
+        uniqueTimesWeekday,
+        uniqueTimesWeekend,
+        weekdayDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
+        weekendDays: ['Sat', 'Sun']
+      });
+
+      setInitialState({
+        weekday: initialWeekday,
+        weekend: initialWeekend
+      });
+
+      setSlotPreferences({
+        weekday: initialWeekday,
+        weekend: initialWeekend
+      });
+
+      setLoading(false);
     };
 
-    // Keyboard move helper: move an item up/down by delta (±1)
-    const moveItemKeyboard = (slotOrder, delta) => {
-      const curPri = preferences[slotOrder].priority ? parseInt(preferences[slotOrder].priority) : null;
-      if (!curPri) return; // nothing to move
-      const targetPri = curPri + delta;
-      if (targetPri < 1) return;
-      // compute new prefs and set
-      let newPrefs = { ...preferences };
-      newPrefs = reorderGroupOnClear(newPrefs, slotOrder, curPri);
-      newPrefs = reorderGroupOnSet(newPrefs, slotOrder, targetPri);
-      setPrefs(newPrefs);
+    fetchSlots();
+  }, []);
+
+  useEffect(() => {
+    if (user && user.role === 'siteAdmin') {
+      const fetchCoaches = async () => {
+        const { data, error } = await supabase
+          .from('coaches')
+          .select('id, name, isCoach')
+          .eq('isCoach', true)
+          .order('name');
+        if (!error && data) {
+          setCoachesList(data);
+        }
+      };
+      fetchCoaches();
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (!calendarData.totalWeekdaySlots || !selectedCoachId) return;
+
+    const fetchPreferences = async () => {
+      const { data } = await supabase
+        .from('preferences')
+        .select('preferences')
+        .eq('coachId', selectedCoachId)
+        .eq('isActive', true)
+        .maybeSingle();
+
+      if (data) {
+        const prefs = data.preferences || {};
+        // Merge with initialState to ensure all current slots are present
+        const merged = {
+          weekday: { ...initialState.weekday, ...(prefs.weekday || {}) },
+          weekend: { ...initialState.weekend, ...(prefs.weekend || {}) }
+        };
+        setSlotPreferences(merged);
+      } else {
+        setSlotPreferences({ ...initialState });
+      }
     };
 
-    return (
-      <div
-        style={{
-          marginBottom: 40,
-          padding: 20,
-          backgroundColor: theme.light,
-          borderRadius: 8,
-          border: `1px solid ${theme.border}`,
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <h3 style={{ color: theme.text, margin: 0 }}>{title}</h3>
-          {(() => {
-            const showCompact = hasGaps(preferences);
-            return (
-              <button
-                onClick={() => {
-                  if (!showCompact) return;
-                  setPrefs((prev) => compactPrefsForGroup(prev));
-                  setToast('Preferences compacted');
-                  setTimeout(() => setToast(null), 2500);
-                }}
-                disabled={!showCompact}
-                title={showCompact ? 'Remove gaps and renumber priorities' : 'No gaps to compact'}
-                style={{
-                  padding: '6px 10px',
-                  fontSize: '0.9em',
-                  fontWeight: 600,
-                  color: 'white',
-                  backgroundColor: showCompact ? theme.primary : '#c0c0c0',
-                  border: 'none',
-                  borderRadius: 6,
-                  cursor: showCompact ? 'pointer' : 'not-allowed',
-                }}
-                onMouseOver={(e) => {
-                  if (showCompact) e.target.style.backgroundColor = theme.primaryHover;
-                }}
-                onMouseOut={(e) => {
-                  if (showCompact) e.target.style.backgroundColor = theme.primary;
-                }}
-              >
-                Compact
-              </button>
-            );
-          })()}
-        </div>
-        <div style={{ display: 'flex', gap: 30 }}>
-          <div style={{ flex: 1 }}>
-            <table
-              style={{
-                borderCollapse: 'collapse',
-                width: '100%',
-                backgroundColor: theme.background,
-                borderRadius: 4,
-                overflow: 'hidden',
-                boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
-              }}
-            >
-              <thead>
-                <tr style={{ backgroundColor: theme.primary }}>
-                  <th
-                    style={{
-                      padding: 12,
-                      color: 'white',
-                      fontWeight: 600,
-                      textAlign: 'left',
-                      borderRight: `1px solid ${theme.border}`,
-                    }}
-                  >
-                    Time
-                  </th>
-                  {days.map((day) => (
-                    <th
-                      key={day}
-                      style={{
-                        padding: 12,
-                        color: 'white',
-                        fontWeight: 600,
-                        textAlign: 'center',
-                        borderRight: `1px solid rgba(255,255,255,0.2)`,
-                      }}
-                    >
-                      {day}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {uniqueTimes.map((time, timeIdx) => (
-                  <tr
-                    key={time}
-                    style={{
-                      backgroundColor: timeIdx % 2 === 0 ? '#fff' : theme.light,
-                      borderBottom: `1px solid ${theme.border}`,
-                    }}
-                  >
-                    <td
-                      style={{
-                        padding: '12px',
-                        fontSize: '0.95em',
-                        fontWeight: 500,
-                        color: theme.text,
-                        borderRight: `1px solid ${theme.border}`,
-                      }}
-                    >
-                      {time}
-                    </td>
-                    {days.map((day) => {
-                      const slotsForDayTime = slotsByDay[day].filter(
-                        (s) => s.slotTime === time
-                      );
-                      if (slotsForDayTime.length === 0) {
-                        return (
-                          <td
-                            key={day}
-                            style={{
-                              borderRight: `1px solid ${theme.border}`,
-                            }}
-                          ></td>
-                        );
-                      }
-                      const slot = slotsForDayTime[0];
-                      const pref = preferences[slot.slotOrder];
-                      const pri = pref.priority ? parseInt(pref.priority) : null;
+    fetchPreferences();
+  }, [selectedCoachId, calendarData.totalWeekdaySlots, initialState]);
 
-                      return (
-                        <td
-                          key={day}
-                          style={{
-                            padding: '8px',
-                            textAlign: 'center',
-                            borderRight: `1px solid ${theme.border}`,
-                          }}
-                        >
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                            <input
-                              type="number"
-                              min="1"
-                              max={totalSlots}
-                              placeholder="—"
-                              value={
-                                editingInputs[slot.slotOrder] !== undefined
-                                  ? editingInputs[slot.slotOrder]
-                                  : pref.priority
-                              }
-                              onFocus={() => {
-                                handleFocus(slot.slotOrder);
-                                setEditingInputs((prev) => ({
-                                  ...prev,
-                                  [slot.slotOrder]:
-                                    editingInputs[slot.slotOrder] !== undefined
-                                      ? editingInputs[slot.slotOrder]
-                                      : pref.priority || '',
-                                }));
-                              }}
-                              onChange={(e) =>
-                                handleLocalInputChange(slot.slotOrder, e.target.value)
-                              }
-                              onBlur={() => commitLocalInput(slot.slotOrder, handleChange)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  e.preventDefault();
-                                  commitLocalInput(slot.slotOrder, handleChange);
-                                  e.currentTarget.blur();
-                                }
-                              }}
-                              style={{
-                                padding: '6px 8px',
-                                fontSize: '0.95em',
-                                border: `2px solid ${
-                                  pref.priority ? theme.primary : theme.border
-                                }`,
-                                borderRadius: 4,
-                                textAlign: 'center',
-                                fontWeight: 600,
-                                color: theme.text,
-                                transition: 'all 0.2s',
-                              }}
-                            />
-                            {/* No 'unavailable' state: all priorities are valid */}
-                          </div>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div style={{ width: 320, flexShrink: 0 }}>
-            <h4 style={{ marginTop: 0, color: theme.text }}>Ranked Preferences</h4>
-            <div
-              style={{
-                border: `2px solid ${theme.primary}`,
-                borderRadius: 6,
-                padding: 12,
-                minHeight: 200,
-                maxHeight: 500,
-                overflowY: 'auto',
-                backgroundColor: theme.background,
-                boxShadow: '0 2px 4px rgba(0,0,0,0.08)',
-              }}
+  const handleAutoComplete = (groupKey) => {
+    setSlotPreferences((prev) => {
+      const newPrefs = { ...prev };
+      const groupPrefs = { ...newPrefs[groupKey] };
+      const totalSlots = groupKey === 'weekday' ? calendarData.totalWeekdaySlots : calendarData.totalWeekendSlots;
 
-            >
-              {orderedList.length === 0 ? (
-                <p
-                  style={{
-                    color: theme.textLight,
-                    textAlign: 'center',
-                    margin: 0,
-                    padding: '40px 10px',
-                    fontSize: '0.95em',
-                  }}
-                >
-                  Click a slot to add it to your list
-                </p>
-              ) : (
-                <ReactSortable
-                  tag="ol"
-                  style={{ margin: 0, paddingLeft: 12, listStyle: 'none' }}
-                  list={orderedList}
-                  setList={reorderFromSortable}
-                  onEnd={(evt) => {
-                    // update prefs when drag finishes (redundant with setList but safe)
-                    handleOrderChange(preferences, setPrefs, evt.oldIndex, evt.newIndex);
-                  }}
-                  animation={150}
-                >
-                  {orderedList.map((item, idx) => (
-                    <li
-                      key={item.order}
-                      tabIndex={0}
-                      onKeyDown={(e) => {
-                        if (e.key === 'ArrowUp') {
-                          e.preventDefault();
-                          moveItemKeyboard(item.order, -1);
-                        } else if (e.key === 'ArrowDown') {
-                          e.preventDefault();
-                          moveItemKeyboard(item.order, 1);
-                        }
-                      }}
-                      style={{
-                        padding: '10px 8px',
-                        margin: '6px 0',
-                        border: `1px solid ${theme.border}`,
-                        borderRadius: 4,
-                        cursor: 'move',
-                        userSelect: 'none',
-                        fontSize: '0.95em',
-                        color: theme.text,
-                        transition: 'all 0.2s',
-                      }}
-                    >
-                      <span style={{ fontWeight: 600 }}>{item.pri}.</span> {item.label}
-                    </li>
-                  ))}
-                </ReactSortable>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
+      // Identify used priorities
+      const usedPriorities = new Set();
+      Object.values(groupPrefs).forEach(p => {
+        if (p.priority) usedPriorities.add(parseInt(p.priority));
+      });
+
+      // Identify available priorities
+      const pool = [];
+      for (let i = 1; i <= totalSlots; i++) {
+        if (!usedPriorities.has(i)) {
+          pool.push(i);
+        }
+      }
+      pool.sort((a, b) => a - b);
+
+      if (pool.length === 0) return prev;
+
+      // Identify empty slots (sorted by slotOrder)
+      const slotOrders = Object.keys(groupPrefs).sort((a, b) => parseInt(a) - parseInt(b));
+      
+      let poolIndex = 0;
+      slotOrders.forEach(order => {
+        if (!groupPrefs[order].priority && poolIndex < pool.length) {
+          groupPrefs[order] = {
+            ...groupPrefs[order],
+            priority: pool[poolIndex].toString(),
+            isAutoAssigned: true
+          };
+          poolIndex++;
+        }
+      });
+
+      newPrefs[groupKey] = groupPrefs;
+      return newPrefs;
+    });
+    setToast('Auto-completed remaining slots');
+    setTimeout(() => setToast(null), 3000);
   };
+
+  const handleMove = (groupKey, fromSlot, toSlot, priority) => {
+    if (fromSlot === toSlot) return;
+
+    setSlotPreferences((prev) => {
+      const newPrefs = { ...prev };
+      const groupPrefs = { ...newPrefs[groupKey] };
+
+      // Get target priority (if swapping)
+      const targetPriority = toSlot ? groupPrefs[toSlot].priority : null;
+
+      // Update target slot
+      if (toSlot) {
+        groupPrefs[toSlot] = { ...groupPrefs[toSlot], priority: priority, isAutoAssigned: false };
+      }
+
+      // Update source slot (if moved from another slot)
+      if (fromSlot) {
+        groupPrefs[fromSlot] = { ...groupPrefs[fromSlot], priority: targetPriority || '', isAutoAssigned: false };
+      }
+
+      newPrefs[groupKey] = groupPrefs;
+      return newPrefs;
+    });
+  };
+
+  const handleSubmit = async () => {
+    if (!user) return;
+
+    setSaving(true);
+    try {
+      // 1. Mark prior preferences as obsolete
+      await supabase
+        .from('preferences')
+        .update({ isActive: false })
+        .eq('coachId', selectedCoachId);
+
+      // 2. Insert new preferences
+      const { error } = await supabase
+        .from('preferences')
+        .insert([
+          {
+            coachId: selectedCoachId,
+            preferences: slotPreferences,
+            isActive: true,
+          },
+        ]);
+
+      if (error) throw error;
+
+      // 3. Update coach flags
+      const hasWeekday = Object.values(slotPreferences.weekday).some((p) => p.priority);
+      const hasWeekend = Object.values(slotPreferences.weekend).some((p) => p.priority);
+
+      await supabase
+        .from('coaches')
+        .update({
+          weekdayPreferencesSaved: hasWeekday,
+          weekendPreferenceSaved: hasWeekend,
+        })
+        .eq('id', selectedCoachId);
+
+      setToast('Preferences saved successfully');
+      setTimeout(() => setToast(null), 3000);
+    } catch (error) {
+      console.error('Error saving preferences:', error);
+      alert('Failed to save preferences');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleReset = () => {
+    if (window.confirm('Are you sure you want to clear all your choices? This cannot be undone.')) {
+      setSlotPreferences({
+        weekday: initialState.weekday,
+        weekend: initialState.weekend,
+      });
+    }
+  };
+
+  if (loading) {
+    return <div style={{ padding: 40, textAlign: 'center', color: theme.text, fontSize: '1.2em' }}>Loading schedule...</div>;
+  }
+
+  const getSaveButtonLabel = () => {
+    if (saving) return 'Saving...';
+    if (user.role === 'siteAdmin' && selectedCoachId !== user.id) {
+      const coachName = coachesList.find(c => c.id === parseInt(selectedCoachId))?.name || 'Coach';
+      return `Save Preferences for ${coachName}`;
+    }
+    return 'Save All Preferences';
+  };
+
+  const {
+    totalWeekdaySlots,
+    totalWeekendSlots,
+    slotsByDayWeekday,
+    slotsByDayWeekend,
+    uniqueTimesWeekday,
+    uniqueTimesWeekend,
+    weekdayDays,
+    weekendDays
+  } = calendarData;
 
   return (
     <div style={{ padding: 30, backgroundColor: '#f0f2f5', minHeight: '100vh' }}>
@@ -579,6 +385,26 @@ const Calendar = () => {
           boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
         }}
       >
+        {user && user.role === 'siteAdmin' && (
+          <div style={{ marginBottom: 20, padding: 15, backgroundColor: theme.light, borderRadius: 8, border: `1px solid ${theme.border}` }}>
+            <label style={{ fontWeight: 'bold', marginRight: 10 }}>Proxy as Coach:</label>
+            <select
+              value={selectedCoachId}
+              onChange={(e) => setSelectedCoachId(e.target.value)}
+              style={{ padding: 5, borderRadius: 4, border: `1px solid ${theme.border}` }}
+            >
+              {coachesList.map((coach) => (
+                <option key={coach.id} value={coach.id}>
+                  {coach.name} {coach.id === user.id ? '(You)' : ''}
+                </option>
+              ))}
+            </select>
+            <div style={{ marginTop: 5, fontSize: '0.9em', color: theme.textLight }}>
+              You are viewing and editing preferences for the selected coach.
+            </div>
+          </div>
+        )}
+
         <h1
           style={{
             color: theme.primary,
@@ -589,6 +415,20 @@ const Calendar = () => {
         >
           Coach's Schedule Preferences
         </h1>
+        
+        {!isSlotsLocked && (
+            <div style={{ padding: '15px', backgroundColor: '#fff3cd', color: '#856404', border: '1px solid #ffeeba', borderRadius: '8px', marginBottom: '20px' }}>
+                <strong>⚠️ Schedule Not Finalized</strong><br/>
+                Administrators are currently updating the schedule slots. You cannot submit preferences until the schedule is locked.
+            </div>
+        )}
+        {isSlotsLocked && (
+            <div style={{ padding: '15px', backgroundColor: '#d4edda', color: '#155724', border: '1px solid #c3e6cb', borderRadius: '8px', marginBottom: '20px' }}>
+                <strong>✅ Schedule Finalized</strong><br/>
+                The schedule slots are locked and ready for your preferences. Please submit your choices below.
+            </div>
+        )}
+
         <p style={{ color: theme.textLight, marginTop: 0 }}>
           Select and rank your preferred practice session times. Click a slot to add it, or drag items in the ranked list to reorder.
         </p>
@@ -599,11 +439,11 @@ const Calendar = () => {
           days={weekdayDays}
           uniqueTimes={uniqueTimesWeekday}
           preferences={slotPreferences.weekday}
-          handleChange={handleChange}
-          handleFocus={handleFocus}
           totalSlots={totalWeekdaySlots}
-          setPrefs={(newPrefs) => setSlotPreferences((prev) => ({ ...prev, weekday: newPrefs }))}
           groupKey="weekday"
+          onMove={(from, to, pri) => handleMove('weekday', from, to, pri)}
+          onAutoComplete={() => handleAutoComplete('weekday')}
+          headerColor={theme.primary}
         />
 
         <GridWithOrderList
@@ -612,33 +452,59 @@ const Calendar = () => {
           days={weekendDays}
           uniqueTimes={uniqueTimesWeekend}
           preferences={slotPreferences.weekend}
-          handleChange={handleChange}
-          handleFocus={handleFocus}
           totalSlots={totalWeekendSlots}
-          setPrefs={(newPrefs) => setSlotPreferences((prev) => ({ ...prev, weekend: newPrefs }))}
           groupKey="weekend"
+          onMove={(from, to, pri) => handleMove('weekend', from, to, pri)}
+          onAutoComplete={() => handleAutoComplete('weekend')}
+          headerColor={theme.weekend}
         />
 
         <div style={{ textAlign: 'center', marginTop: 40 }}>
-          <button
-            onClick={handleSubmit}
-            style={{
-              padding: '12px 40px',
-              fontSize: '1.05em',
-              fontWeight: 600,
-              color: 'white',
-              backgroundColor: theme.success,
-              border: 'none',
-              borderRadius: 6,
-              cursor: 'pointer',
-              transition: 'all 0.3s',
-              boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-            }}
-            onMouseOver={(e) => (e.target.style.backgroundColor = '#218838')}
-            onMouseOut={(e) => (e.target.style.backgroundColor = theme.success)}
-          >
-            Save All Preferences
-          </button>
+          {user && (user.role === 'coach' || user.role === 'siteAdmin') ? (
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '20px' }}>
+              <button
+                onClick={handleReset}
+                style={{
+                  padding: '12px 40px',
+                  fontSize: '1.05em',
+                  fontWeight: 600,
+                  color: 'white',
+                  backgroundColor: theme.danger,
+                  border: 'none',
+                  borderRadius: 6,
+                  cursor: 'pointer',
+                  transition: 'all 0.3s',
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                }}
+                onMouseOver={(e) => (e.target.style.backgroundColor = '#c82333')}
+                onMouseOut={(e) => (e.target.style.backgroundColor = theme.danger)}
+              >
+                Reset Choices
+              </button>
+              <button
+                onClick={handleSubmit}
+                disabled={saving || !isSlotsLocked}
+                style={{
+                  padding: '12px 40px',
+                  fontSize: '1.05em',
+                  fontWeight: 600,
+                  color: 'white',
+                  backgroundColor: (saving || !isSlotsLocked) ? theme.secondary : theme.success,
+                  border: 'none',
+                  borderRadius: 6,
+                  cursor: (saving || !isSlotsLocked) ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.3s',
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                }}
+                onMouseOver={(e) => (!saving && isSlotsLocked) && (e.target.style.backgroundColor = '#218838')}
+                onMouseOut={(e) => (!saving && isSlotsLocked) && (e.target.style.backgroundColor = theme.success)}
+              >
+                {getSaveButtonLabel()}
+              </button>
+            </div>
+          ) : (
+            <p style={{ color: theme.textLight, fontStyle: 'italic' }}>Read-only view (Admin)</p>
+          )}
         </div>
       </div>
       {toast && (
