@@ -186,7 +186,7 @@ const Calendar = () => {
       const fetchCoaches = async () => {
         const { data, error } = await supabase
           .from('coaches')
-          .select('id, name, isCoach')
+          .select('id, name, isCoach, teamGrade, teamGender, teamName')
           .eq('isCoach', true)
           .order('name');
         if (!error && data) {
@@ -393,11 +393,23 @@ const Calendar = () => {
               onChange={(e) => setSelectedCoachId(e.target.value)}
               style={{ padding: 5, borderRadius: 4, border: `1px solid ${theme.border}` }}
             >
-              {coachesList.map((coach) => (
-                <option key={coach.id} value={coach.id}>
-                  {coach.name} {coach.id === user.id ? '(You)' : ''}
-                </option>
-              ))}
+              {coachesList.map((coach) => {
+                const parts = [];
+                if (coach.teamGrade) parts.push(`${coach.teamGrade}th`);
+                if (coach.teamGender === 'B') parts.push('Boys');
+                else if (coach.teamGender === 'G') parts.push('Girls');
+                else if (coach.teamGender) parts.push(coach.teamGender);
+                if (coach.teamName) parts.push(coach.teamName);
+
+                const details = parts.length > 0 ? ` (${parts.join(' ')})` : '';
+                const youLabel = coach.id === user.id ? ' (You)' : '';
+
+                return (
+                  <option key={coach.id} value={coach.id}>
+                    {coach.name}{details}{youLabel}
+                  </option>
+                );
+              })}
             </select>
             <div style={{ marginTop: 5, fontSize: '0.9em', color: theme.textLight }}>
               You are viewing and editing preferences for the selected coach.

@@ -6,6 +6,7 @@ export const theme = {
   primaryHover: BRANDING.colors.primaryHover,
   weekend: '#6f42c1',
   autoAssigned: '#66b2ff',
+  fallback: BRANDING.colors.warning || '#ffc107',
   secondary: BRANDING.colors.secondary,
   success: BRANDING.colors.success,
   danger: BRANDING.colors.danger,

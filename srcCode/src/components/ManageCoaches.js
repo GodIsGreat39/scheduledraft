@@ -24,9 +24,37 @@ const ManageCoaches = () => {
   }, []);
 
   const fetchCoaches = async () => {
-    const { data, error } = await supabase.from('coaches').select('*').order('id');
-    if (error) console.error('Error fetching coaches:', error);
-    else setCoaches(data);
+    const [coachesRes, prefsRes] = await Promise.all([
+      supabase.from('coaches').select('*').order('id'),
+      supabase.from('preferences').select('coachId, preferences').eq('isActive', true)
+    ]);
+
+    if (coachesRes.error) {
+      console.error('Error fetching coaches:', coachesRes.error);
+      return;
+    }
+
+    const coachesData = coachesRes.data;
+    const prefsData = prefsRes.data || [];
+
+    const mergedCoaches = coachesData.map(coach => {
+      const userPrefs = prefsData.find(p => p.coachId === coach.id);
+      let weekdaySaved = false;
+      let weekendSaved = false;
+
+      if (userPrefs && userPrefs.preferences) {
+        weekdaySaved = Object.values(userPrefs.preferences.weekday || {}).some(p => p.priority);
+        weekendSaved = Object.values(userPrefs.preferences.weekend || {}).some(p => p.priority);
+      }
+
+      return {
+        ...coach,
+        weekdayPreferencesSaved: weekdaySaved,
+        weekendPreferenceSaved: weekendSaved
+      };
+    });
+
+    setCoaches(mergedCoaches);
   };
 
   const handleInputChange = (e) => {

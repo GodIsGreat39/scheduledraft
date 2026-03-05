@@ -33,8 +33,10 @@ const FinalSelections = () => {
       // 2. Process Slots to match Calendar.js logic (assign slotOrder)
       const dayOrder = { 'Mon': 1, 'Tue': 2, 'Wed': 3, 'Thu': 4, 'Fri': 5, 'Sat': 6, 'Sun': 7 };
       const sortedSlots = dbSlots.sort((a, b) => {
-        const dA = dayOrder[a.slotDay] || 99;
-        const dB = dayOrder[b.slotDay] || 99;
+        const dayA = (a.slotDay || '').trim();
+        const dayB = (b.slotDay || '').trim();
+        const dA = dayOrder[dayA] || 99;
+        const dB = dayOrder[dayB] || 99;
         if (dA !== dB) return dA - dB;
         return a.slotStartTime.localeCompare(b.slotStartTime);
       });
@@ -80,7 +82,7 @@ const FinalSelections = () => {
                     }
                 });
             }
-            return list.sort((a, b) => a.priority - b.priority).map(p => p.slotId);
+            return list.sort((a, b) => a.priority - b.priority);
         };
 
         if (coachPrefRecord && coachPrefRecord.preferences) {
@@ -107,13 +109,16 @@ const FinalSelections = () => {
 
               const queue = queues[coach.id];
               let assignedSlotId = null;
+              let assignedPreferenceRank = null;
               let isFallback = false;
 
               // Find highest priority slot that is still available
               while (queue && queue.length > 0) {
-                const candidateId = queue.shift(); // Take top preference
+                const candidate = queue.shift(); // Take top preference
+                const candidateId = candidate.slotId;
                 if (availableSlotIds.has(candidateId)) {
                   assignedSlotId = candidateId;
+                  assignedPreferenceRank = candidate.priority;
                   break;
                 } else {
                   // Check if another slot at the same time is available
@@ -127,6 +132,7 @@ const FinalSelections = () => {
                     const alternative = sameTimeSlots.find(s => availableSlotIds.has(s.id));
                     if (alternative) {
                       assignedSlotId = alternative.id;
+                      assignedPreferenceRank = candidate.priority;
                       break;
                     }
                   }
@@ -149,7 +155,8 @@ const FinalSelections = () => {
                   coachGrade: coach.teamGrade,
                   coachGender: coach.teamGender,
                   coachTeam: coach.teamName,
-                  preferenceRank: round, // In this draft logic, round corresponds to the preference rank being satisfied
+                  draftOrder: coach.draftPriority,
+                  preferenceRank: assignedPreferenceRank,
                   isFallback,
                   slotId: slot.id,
                   slotLabel: `${slot.slotDay} ${slot.slotStartTime.slice(0, 5)} - ${slot.slotEndTime.slice(0, 5)}`
@@ -263,13 +270,14 @@ const FinalSelections = () => {
                         {cellAssignments.length > 0 ? (
                           cellAssignments.map(assignment => (
                           <div key={assignment.slotId}
-                            style={{ backgroundColor: assignment.isFallback ? theme.autoAssigned : theme.success, color: 'white', padding: '8px', borderRadius: 4, fontSize: '0.9em', boxShadow: '0 1px 2px rgba(0,0,0,0.1)', cursor: 'default' }}
-                            title={assignment.isFallback ? "System Assigned (Fallback)" : `Assigned Preference #${assignment.preferenceRank}`}
+                            style={{ backgroundColor: assignment.isFallback ? (theme.fallback || '#ffc107') : theme.success, color: assignment.isFallback ? theme.text : 'white', padding: '8px', borderRadius: 4, fontSize: '0.9em', boxShadow: '0 1px 2px rgba(0,0,0,0.1)', cursor: 'default' }}
+                            title={assignment.isFallback ? "System Assigned (No Preference Submitted)" : `Assigned Preference #${assignment.preferenceRank}`}
                           >
                             <div style={{ fontWeight: 'bold' }}>{assignment.coachName}</div>
                             <div style={{ fontSize: '0.85em', marginTop: 2 }}>
                               {assignment.coachGrade}th {assignment.coachGender === 'B' ? 'Boys' : assignment.coachGender === 'G' ? 'Girls' : assignment.coachGender} {assignment.coachTeam} - Round {assignment.round}
                             </div>
+                            <div style={{ fontSize: '0.85em', marginTop: 2 }}>Draft Order: {assignment.draftOrder}</div>
                           </div>))
                         ) : (
                           <div style={{ color: theme.textLight, fontSize: '0.85em', fontStyle: 'italic' }}>Unassigned</div>
