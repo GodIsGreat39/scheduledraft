@@ -242,8 +242,8 @@ const FinalSelections = () => {
   const renderGrid = (title, days, uniqueTimes, slotsByDay, headerColor) => (
     <div style={{ marginBottom: 40, backgroundColor: theme.background, borderRadius: 8, border: `1px solid ${theme.border}`, overflow: 'hidden' }}>
       <h3 style={{ padding: '15px 20px', margin: 0, backgroundColor: theme.light, borderBottom: `1px solid ${theme.border}`, color: theme.text }}>{title}</h3>
-      <div style={{display: 'flex',  padding: 20 }}>
-        <table style={{ borderCollapse: 'collapse', width: '100%', borderRadius: 4, overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+      <div style={{display: 'flex',  padding: 20; overflow:'scroll'; }}>
+        <table style={{ borderCollapse: 'collapse', width: '100%', borderRadius: 4, overflow: 'scroll', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
           <thead>
             <tr style={{ backgroundColor: headerColor }}>
               <th style={{ padding: 12, color: 'white', fontWeight: 600, textAlign: 'left', borderRight: `1px solid ${theme.border}` }}>Time</th>
